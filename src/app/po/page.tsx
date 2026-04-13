@@ -4,6 +4,11 @@ import { useState } from "react";
 
 export default function POPage() {
   const [showForm, setShowForm] = useState(false);
+  const [questions, setQuestions] = useState([{ id: 1 }]);
+
+  const addQuestion = () => {
+    setQuestions((prev) => [...prev, { id: prev.length + 1 }]);
+  };
 
   return (
     <main className="min-h-screen bg-slate-50 p-10 text-slate-900">
@@ -126,74 +131,80 @@ export default function POPage() {
           <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-5">
             <div className="flex items-center justify-between gap-4">
               <h3 className="text-xl font-semibold">Вопросы повестки</h3>
+
               <button
                 type="button"
-                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-100"
+                onClick={addQuestion}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
               >
                 Добавить вопрос
               </button>
             </div>
 
-            <div className="mt-4 rounded-xl border bg-white p-4">
-              <p className="font-medium">Вопрос 1</p>
+            <div className="mt-4 space-y-4">
+              {questions.map((question) => (
+                <div key={question.id} className="rounded-xl border bg-white p-4">
+                  <p className="font-medium">Вопрос {question.id}</p>
 
-              <div className="mt-4 grid gap-4">
-                <div>
-                  <label className="mb-2 block text-sm font-medium">
-                    Формулировка вопроса
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full rounded-xl border px-4 py-3"
-                    placeholder="Например: Об утверждении плана работы ПО"
-                  />
+                  <div className="mt-4 grid gap-4">
+                    <div>
+                      <label className="mb-2 block text-sm font-medium">
+                        Формулировка вопроса
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full rounded-xl border px-4 py-3"
+                        placeholder="Например: Об утверждении плана работы ПО"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-medium">
+                        Тезисы / комментарий пользователя
+                      </label>
+                      <textarea
+                        className="w-full rounded-xl border px-4 py-3"
+                        rows={3}
+                        placeholder="Коротко опиши суть вопроса"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="mb-2 block text-sm font-medium">
+                        Докладчик
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full rounded-xl border px-4 py-3"
+                        placeholder="Например: Секретарь ПО"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+                      >
+                        Предложить суть вопроса
+                      </button>
+
+                      <button
+                        type="button"
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
+                      >
+                        Предложить решение
+                      </button>
+
+                      <button
+                        type="button"
+                        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
+                      >
+                        Предложить полный блок
+                      </button>
+                    </div>
+                  </div>
                 </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium">
-                    Тезисы / комментарий пользователя
-                  </label>
-                  <textarea
-                    className="w-full rounded-xl border px-4 py-3"
-                    rows={3}
-                    placeholder="Коротко опиши суть вопроса"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium">
-                    Докладчик
-                  </label>
-                  <input
-                    type="text"
-                    className="w-full rounded-xl border px-4 py-3"
-                    placeholder="Например: Секретарь ПО"
-                  />
-                </div>
-
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-                  >
-                    Предложить суть вопроса
-                  </button>
-
-                  <button
-                    type="button"
-                    className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-100"
-                  >
-                    Предложить решение
-                  </button>
-
-                  <button
-                    type="button"
-                    className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-100"
-                  >
-                    Предложить полный блок
-                  </button>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </div>
