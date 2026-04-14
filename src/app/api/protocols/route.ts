@@ -2,6 +2,38 @@ import { prisma } from "@/lib/prisma";
 import { DocumentStatus, DocumentType, OrganType } from "@prisma/client";
 import { NextResponse } from "next/server";
 
+export async function GET() {
+  try {
+    const documents = await prisma.document.findMany({
+      where: {
+        type: DocumentType.PROTOCOL,
+        organ: {
+          type: OrganType.PO,
+        },
+      },
+      include: {
+        organ: true,
+        agendaItems: {
+          orderBy: {
+            orderIndex: "asc",
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    return NextResponse.json({ ok: true, documents });
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json(
+      { ok: false, error: "Ошибка получения протоколов" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const data = await request.json();

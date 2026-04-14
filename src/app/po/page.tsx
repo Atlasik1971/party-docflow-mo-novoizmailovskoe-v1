@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Question = {
   id: number;
@@ -27,12 +27,37 @@ type FormData = {
   invited: string;
 };
 
+type SavedAgendaItem = {
+  id: string;
+  orderIndex: number;
+  title: string;
+};
+
+type SavedProtocol = {
+  id: string;
+  title: string;
+  number: string | null;
+  meetingDate: string | null;
+  place: string | null;
+  body: string | null;
+  createdAt?: string;
+  organ?: {
+    name: string;
+    code: string | null;
+  };
+  agendaItems: SavedAgendaItem[];
+};
+
 export default function POPage() {
   const [showForm, setShowForm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
-
+  const [savedProtocols, setSavedProtocols] = useState<SavedProtocol[]>([]);
+  const [isLoadingProtocols, setIsLoadingProtocols] = useState(false);
+  const [selectedProtocol, setSelectedProtocol] = useState<SavedProtocol | null>(
+    null
+  );
   const [formData, setFormData] = useState<FormData>({
     poNumber: "",
     meetingDate: "",
@@ -59,6 +84,27 @@ export default function POPage() {
       votesEditedManually: false,
     },
   ]);
+
+  const loadProtocols = async () => {
+    try {
+      setIsLoadingProtocols(true);
+
+      const response = await fetch("/api/protocols");
+      const result = await response.json();
+
+      if (result.ok) {
+        setSavedProtocols(result.documents || []);
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsLoadingProtocols(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProtocols();
+  }, []);
 
   const updateFormData = (field: keyof FormData, value: string) => {
     setFormData((prev) => ({
@@ -142,10 +188,7 @@ export default function POPage() {
       ? `Информацию ${question.speaker}`
       : "Информацию по вопросу";
 
-    const titleText = question.title
-      ? ` по вопросу «${question.title}»`
-      : "";
-
+    const titleText = question.title ? ` по вопросу «${question.title}»` : "";
     const notesText = question.notes ? ` ${question.notes.trim()}` : "";
 
     return `${speakerText}${titleText}.${notesText}`.trim();
@@ -273,6 +316,7 @@ ${question.decision || "Проект решения пока не сформир
 
       if (result.ok) {
         setSaveMessage("Протокол сохранен в базу");
+        await loadProtocols();
       } else {
         setSaveMessage("Ошибка сохранения");
       }
@@ -305,12 +349,177 @@ ${question.decision || "Проект решения пока не сформир
 
       <button
         type="button"
-        onClick={() => setShowForm(true)}
+        onClick={() => {
+          setSelectedProtocol(null);
+          setShowForm(true);
+        }}
         className="mt-6 rounded-xl bg-black px-5 py-3 text-white"
       >
         Создать протокол
       </button>
 
+      <div className="mt-6 rounded-2xl border bg-white p-6">
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-2xl font-semibold">Сохранённые протоколы ПО</h2>
+
+          <button
+            type="button"
+            onClick={loadProtocols}
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
+          >
+            {isLoadingProtocols ? "Обновление..." : "Обновить список"}
+          </button>
+        </div>
+
+        <div className="mt-6 space-y-4">
+          {savedProtocols.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Пока нет сохранённых протоколов.
+            </p>
+          ) : (
+            savedProtocols.map((protocol) => (
+              <div
+  key={protocol.id}
+  onClick={() => {
+    setShowForm(false);
+    setSelectedProtocol(protocol);
+  }}
+  className="cursor-pointer rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:bg-slate-100"
+>
+                <p className="text-lg font-semibold">
+                  {protocol.title || "Без названия"}
+                </p>
+
+                <div className="mt-2 space-y-1 text-sm text-slate-600">
+                  <p>Номер протокола: {protocol.number || "—"}</p>
+                  <p>Дата собрания: {protocol.meetingDate || "—"}</p>
+                  <p>Место проведения: {protocol.place || "—"}</p>
+                  <p>ПО: {protocol.organ?.name || "—"}</p>
+                </div>
+
+                <div className="mt-3">
+                  <p className="text-sm font-medium text-slate-700">
+                    Вопросы повестки:
+                  </p>
+                  <ul className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-600">
+                    {protocol.agendaItems.map((item) => (
+                      <li key={item.id}>{item.title || "Без названия вопроса"}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      {selectedProtocol && (
+  <div className="rounded-2xl border bg-white p-6">
+    <div className="flex items-center justify-between gap-4">
+      <h2 className="text-2xl font-semibold">Просмотр сохранённого протокола</h2>
+
+      <button
+        type="button"
+        onClick={() => setSelectedProtocol(null)}
+        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
+      >
+        Закрыть
+      </button>
+    </div>
+
+    <div className="mt-4 space-y-2 text-sm text-slate-600">
+      <p>
+        <span className="font-medium text-slate-800">Название:</span>{" "}
+        {selectedProtocol.title || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">Номер:</span>{" "}
+        {selectedProtocol.number || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">Дата:</span>{" "}
+        {selectedProtocol.meetingDate || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">Место:</span>{" "}
+        {selectedProtocol.place || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">ПО:</span>{" "}
+        {selectedProtocol.organ?.name || "—"}
+      </p>
+    </div>
+
+    <div className="mt-6">
+      <p className="text-sm font-medium text-slate-700">Повестка:</p>
+      <ul className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-600">
+        {selectedProtocol.agendaItems.map((item) => (
+          <li key={item.id}>{item.title || "Без названия вопроса"}</li>
+        ))}
+      </ul>
+    </div>
+
+    <div className="mt-6">
+      <p className="text-sm font-medium text-slate-700">Полный текст:</p>
+      <pre className="mt-3 whitespace-pre-wrap rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm leading-6 text-slate-800">
+        {selectedProtocol.body || "Текст документа отсутствует"}
+      </pre>
+    </div>
+  </div>
+)}
+      {selectedProtocol && (
+  <div className="rounded-2xl border bg-white p-6">
+    <div className="flex items-center justify-between gap-4">
+      <h2 className="text-2xl font-semibold">Просмотр сохранённого протокола</h2>
+
+      <button
+        type="button"
+        onClick={() => setSelectedProtocol(null)}
+        className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
+      >
+        Закрыть
+      </button>
+    </div>
+
+    <div className="mt-4 space-y-2 text-sm text-slate-600">
+      <p>
+        <span className="font-medium text-slate-800">Название:</span>{" "}
+        {selectedProtocol.title || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">Номер:</span>{" "}
+        {selectedProtocol.number || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">Дата:</span>{" "}
+        {selectedProtocol.meetingDate || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">Место:</span>{" "}
+        {selectedProtocol.place || "—"}
+      </p>
+      <p>
+        <span className="font-medium text-slate-800">ПО:</span>{" "}
+        {selectedProtocol.organ?.name || "—"}
+      </p>
+    </div>
+
+    <div className="mt-6">
+      <p className="text-sm font-medium text-slate-700">Повестка:</p>
+      <ul className="mt-2 list-decimal space-y-1 pl-5 text-sm text-slate-600">
+        {selectedProtocol.agendaItems.map((item) => (
+          <li key={item.id}>{item.title || "Без названия вопроса"}</li>
+        ))}
+      </ul>
+    </div>
+
+    <div className="mt-6">
+      <p className="text-sm font-medium text-slate-700">Полный текст:</p>
+      <pre className="mt-3 whitespace-pre-wrap rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm leading-6 text-slate-800">
+        {selectedProtocol.body || "Текст документа отсутствует"}
+      </pre>
+    </div>
+  </div>
+)}
       {showForm && (
         <div className="mt-6 space-y-6">
           <div className="rounded-2xl border bg-white p-6">
