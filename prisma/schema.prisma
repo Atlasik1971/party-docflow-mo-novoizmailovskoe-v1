@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum OrganType {
+  PO
+  MPS
+  MKK
+  DO
+  REVIZOR_PO
+}
+
+enum DocumentType {
+  PROTOCOL
+  DECISION
+  REPORT
+  PLAN
+  ACT
+  EXTRACT
+  SCHEDULE
+  PRESCRIPTION
+  OTHER
+}
+
+enum DocumentStatus {
+  DRAFT
+  ACTIVE
+  APPROVED
+  ARCHIVED
+}
+
+enum ObligationStatus {
+  NEW
+  IN_PROGRESS
+  DONE
+  OVERDUE
+  CANCELLED
+}
+
+model Organ {
+  id          String      @id @default(cuid())
+  name        String
+  type        OrganType
+  code        String?
+  description String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  documents   Document[]
+  obligationsSource Obligation[] @relation("SourceOrgan")
+  obligationsTarget Obligation[] @relation("TargetOrgan")
+}
+
+model Document {
+  id            String         @id @default(cuid())
+  title         String
+  type          DocumentType
+  status        DocumentStatus @default(DRAFT)
+  number        String?
+  meetingDate   DateTime?
+  place         String?
+  body          String?
+  organId       String
+  organ         Organ          @relation(fields: [organId], references: [id], onDelete: Cascade)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  agendaItems   AgendaItem[]
+  linksFrom     DocumentLink[] @relation("FromDocument")
+  linksTo       DocumentLink[] @relation("ToDocument")
+  obligationsCreated Obligation[] @relation("SourceDocument")
+  obligationsClosed  Obligation[] @relation("ClosingDocument")
+}
+
+model AgendaItem {
+  id            String   @id @default(cuid())
+  documentId     String
+  document       Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  orderIndex     Int
+  title          String
+  notes          String?
+  speaker        String?
+  essence        String?
+  decision       String?
+  votesFor       String?
+  votesAgainst   String?
+  abstained      String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model DocumentLink {
+  id              String   @id @default(cuid())
+  fromDocumentId  String
+  toDocumentId    String
+  relationType    String
+  description     String?
+
+  fromDocument    Document @relation("FromDocument", fields: [fromDocumentId], references: [id], onDelete: Cascade)
+  toDocument      Document @relation("ToDocument", fields: [toDocumentId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+}
+
+model Obligation {
+  id               String            @id @default(cuid())
+  title            String
+  description      String?
+  status           ObligationStatus  @default(NEW)
+  dueDate          DateTime?
+  sourceOrganId    String?
+  targetOrganId    String?
+  sourceDocumentId String?
+  closingDocumentId String?
+
+  sourceOrgan      Organ?    @relation("SourceOrgan", fields: [sourceOrganId], references: [id], onDelete: SetNull)
+  targetOrgan      Organ?    @relation("TargetOrgan", fields: [targetOrganId], references: [id], onDelete: SetNull)
+  sourceDocument   Document? @relation("SourceDocument", fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  closingDocument  Document? @relation("ClosingDocument", fields: [closingDocumentId], references: [id], onDelete: SetNull)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}

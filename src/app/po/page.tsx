@@ -30,6 +30,8 @@ type FormData = {
 export default function POPage() {
   const [showForm, setShowForm] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
 
   const [formData, setFormData] = useState<FormData>({
     poNumber: "",
@@ -250,9 +252,56 @@ ${question.decision || "Проект решения пока не сформир
     }, 2000);
   };
 
+  const saveProtocol = async () => {
+    try {
+      setIsSaving(true);
+      setSaveMessage("");
+
+      const response = await fetch("/api/protocols", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...formData,
+          protocolDraft,
+          questions,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.ok) {
+        setSaveMessage("Протокол сохранен в базу");
+      } else {
+        setSaveMessage("Ошибка сохранения");
+      }
+    } catch (error) {
+      console.error(error);
+      setSaveMessage("Ошибка сохранения");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-slate-50 p-10 text-slate-900">
       <h1 className="text-4xl font-bold">Блок ПО</h1>
+
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={saveProtocol}
+          disabled={isSaving}
+          className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
+        >
+          {isSaving ? "Сохранение..." : "Сохранить в базу"}
+        </button>
+
+        {saveMessage && (
+          <p className="self-center text-sm text-slate-600">{saveMessage}</p>
+        )}
+      </div>
 
       <button
         type="button"
