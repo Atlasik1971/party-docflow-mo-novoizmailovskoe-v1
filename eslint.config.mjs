@@ -12,6 +12,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated artifacts and clients:
+    "**/generated/**",
+    "**/.prisma/**",
+    "**/*.generated.*",
+    "**/*.gen.*",
+    "prisma/migrations/**",
   ]),
 ]);
 
