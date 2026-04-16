@@ -73,6 +73,45 @@ type SavedProtocol = {
   agendaItems: SavedAgendaItem[];
 };
 
+/** Номера первичных отделений для навигации по списку */
+const PO_NUMBERS: string[] = [
+  "1367", "1368", "1369", "1370", "1371", "1372", "1373", "1374", "1375",
+  "1376", "1377", "1378", "1379", "1380", "1381", "1382", "1383", "1384",
+  "1385", "1386", "1387", "1388", "1389", "1390", "1391", "1392", "1393",
+  "1394", "1413",
+];
+
+function yearFromMeetingDate(
+  meetingDate: string | null | undefined
+): number | null {
+  if (!meetingDate) return null;
+  const d = new Date(meetingDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getFullYear();
+}
+
+function normalizePoCode(code: string | null | undefined): string {
+  if (!code) return "";
+  return code.replace(/\D/g, "");
+}
+
+function buildProtocolsByYearAndPo(
+  protocols: SavedProtocol[]
+): Map<number, Map<string, SavedProtocol[]>> {
+  const outer = new Map<number, Map<string, SavedProtocol[]>>();
+  for (const doc of protocols) {
+    const y = yearFromMeetingDate(doc.meetingDate);
+    if (y === null) continue;
+    const po = normalizePoCode(doc.organ?.code);
+    if (!po) continue;
+    if (!outer.has(y)) outer.set(y, new Map());
+    const inner = outer.get(y)!;
+    if (!inner.has(po)) inner.set(po, []);
+    inner.get(po)!.push(doc);
+  }
+  return outer;
+}
+
 function toNonNegativeInt(value: string): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) {
@@ -195,6 +234,15 @@ export default function POPage() {
     null
   );
 
+  /** Выбранный в левой панели год для дерева год → ПО → протоколы */
+  const [treeYear, setTreeYear] = useState<number | null>(null);
+  const [yearModalOpen, setYearModalOpen] = useState(false);
+  const [expandedPoCodes, setExpandedPoCodes] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [poListFilter, setPoListFilter] = useState("");
+  const [protocolSortNewestFirst, setProtocolSortNewestFirst] = useState(true);
+
   const [formData, setFormData] = useState<FormData>({
     poNumber: "",
     meetingDate: "",
@@ -229,6 +277,51 @@ export default function POPage() {
   useEffect(() => {
     loadProtocols();
   }, []);
+
+  const protocolsByYearAndPo = useMemo(
+    () => buildProtocolsByYearAndPo(savedProtocols),
+    [savedProtocols]
+  );
+
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    protocolsByYearAndPo.forEach((_m, y) => years.add(y));
+    years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [protocolsByYearAndPo]);
+
+  const filteredPoNumbers = useMemo(() => {
+    const q = poListFilter.trim().replace(/\D/g, "");
+    if (!q) return PO_NUMBERS;
+    return PO_NUMBERS.filter((n) => n.includes(q));
+  }, [poListFilter]);
+
+  const protocolsForPoInTreeYear = (poCode: string): SavedProtocol[] => {
+    if (treeYear === null) return [];
+    const inner = protocolsByYearAndPo.get(treeYear);
+    if (!inner) return [];
+    return inner.get(poCode) ?? [];
+  };
+
+  const togglePoExpanded = (poCode: string) => {
+    setExpandedPoCodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(poCode)) next.delete(poCode);
+      else next.add(poCode);
+      return next;
+    });
+  };
+
+  const yearProtocolTotal = useMemo(() => {
+    if (treeYear === null) return 0;
+    const inner = protocolsByYearAndPo.get(treeYear);
+    if (!inner) return 0;
+    let n = 0;
+    inner.forEach((arr) => {
+      n += arr.length;
+    });
+    return n;
+  }, [treeYear, protocolsByYearAndPo]);
 
   const resetForm = () => {
     setFormData({
@@ -560,11 +653,19 @@ export default function POPage() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         <aside className="xl:col-span-1">
-          <div className="rounded-2xl border bg-white p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold">Сохранённые протоколы ПО</h2>
-
-              <div className="flex gap-2">
+          <div className="flex max-h-[min(85vh,calc(100vh-8rem))] flex-col rounded-2xl border bg-white p-4">
+            <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <h2 className="text-base font-semibold text-slate-800">
+                Протоколы ПО
+              </h2>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setYearModalOpen(true)}
+                  className="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white"
+                >
+                  Выбрать протокол
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -572,72 +673,246 @@ export default function POPage() {
                     setSelectedProtocol(null);
                     setShowForm(true);
                   }}
-                  className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white"
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium"
                 >
                   Создать
                 </button>
-
                 <button
                   type="button"
                   onClick={loadProtocols}
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium"
+                  disabled={isLoadingProtocols}
+                  className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium disabled:opacity-60"
                 >
-                  {isLoadingProtocols ? "Обновление..." : "Обновить"}
+                  {isLoadingProtocols ? "…" : "Обновить"}
                 </button>
               </div>
             </div>
 
-            <div className="mt-4 space-y-3">
-              {savedProtocols.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  Пока нет сохранённых протоколов.
+            {treeYear === null ? (
+              <div className="mt-4 flex flex-1 flex-col text-sm text-slate-600">
+                <p>
+                  Выберите год, затем номер ПО и протокол в дереве слева. Форма
+                  откроется справа после выбора записи.
                 </p>
-              ) : (
-                savedProtocols.map((protocol) => (
-                  <div
-                    key={protocol.id}
-                    onClick={() => loadProtocolIntoForm(protocol)}
-                    className="cursor-pointer rounded-xl border border-slate-200 bg-slate-50 p-4 transition hover:bg-slate-100"
+                <button
+                  type="button"
+                  onClick={() => setYearModalOpen(true)}
+                  className="mt-3 w-full rounded-lg border border-slate-300 py-2 text-xs font-medium text-slate-800"
+                >
+                  Выбрать год
+                </button>
+              </div>
+            ) : (
+              <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+                <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setYearModalOpen(true)}
+                    className="font-semibold text-slate-900 underline-offset-2 hover:underline"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="text-sm font-semibold leading-5">
-                        {protocol.title || "Без названия"}
-                      </p>
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteProtocol(protocol.id);
-                        }}
-                        className="rounded-lg border border-red-300 px-2 py-1 text-xs font-medium text-red-600"
-                      >
-                        Удалить
-                      </button>
-                    </div>
-
-                    <div className="mt-2 space-y-1 text-xs text-slate-600">
-                      <p>Номер: {protocol.number || "—"}</p>
-                      <p>Дата: {protocol.meetingDate || "—"}</p>
-                      <p>Место: {protocol.place || "—"}</p>
-                      <p>ПО: {protocol.organ?.name || "—"}</p>
-                    </div>
-
-                    <div className="mt-2 text-xs text-slate-600">
-                      <p className="font-medium text-slate-700">Повестка:</p>
-                      <ul className="mt-1 list-decimal space-y-1 pl-4">
-                        {protocol.agendaItems.map((item) => (
-                          <li key={item.id}>
-                            {item.title || "Без названия вопроса"}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                    Год: {treeYear}
+                  </button>
+                  <span className="text-slate-500">
+                    всего за год:{" "}
+                    <span className="font-medium text-slate-700">
+                      {yearProtocolTotal}
+                    </span>
+                  </span>
+                </div>
+                {yearProtocolTotal === 0 && (
+                  <p className="flex-shrink-0 rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                    Протоколы за выбранный год отсутствуют.
+                  </p>
+                )}
+                <div className="flex flex-shrink-0 items-center gap-2">
+                  <input
+                    type="search"
+                    value={poListFilter}
+                    onChange={(e) => setPoListFilter(e.target.value)}
+                    placeholder="Поиск по номеру ПО…"
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                  />
+                  <button
+                    type="button"
+                    title={
+                      protocolSortNewestFirst
+                        ? "Сначала новые"
+                        : "Сначала старые"
+                    }
+                    onClick={() =>
+                      setProtocolSortNewestFirst((v) => !v)
+                    }
+                    className="flex-shrink-0 rounded-lg border border-slate-200 px-2 py-1.5 text-[11px] font-medium text-slate-700"
+                  >
+                    {protocolSortNewestFirst ? "↓ дата" : "↑ дата"}
+                  </button>
+                </div>
+                <div className="mt-1 flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-slate-100 bg-slate-50/80">
+                  <div className="flex-shrink-0 border-b border-slate-100 px-2 py-1.5 text-[11px] font-semibold text-slate-700">
+                    <span className="text-slate-400">▼</span>{" "}
+                    <span className="tabular-nums">{treeYear}</span>
+                    <span className="ml-1 font-normal text-slate-500">
+                      · номеров в списке: {filteredPoNumbers.length}
+                      {poListFilter.trim() !== "" &&
+                        filteredPoNumbers.length !== PO_NUMBERS.length &&
+                        ` из ${PO_NUMBERS.length}`}
+                    </span>
                   </div>
-                ))
-              )}
-            </div>
+                  <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-1 py-1 text-xs">
+                  {filteredPoNumbers.map((poCode) => {
+                    const list = protocolsForPoInTreeYear(poCode);
+                    const sorted = [...list].sort((a, b) => {
+                      const ta = a.meetingDate
+                        ? new Date(a.meetingDate).getTime()
+                        : 0;
+                      const tb = b.meetingDate
+                        ? new Date(b.meetingDate).getTime()
+                        : 0;
+                      return protocolSortNewestFirst ? tb - ta : ta - tb;
+                    });
+                    const expanded = expandedPoCodes.has(poCode);
+                    const count = list.length;
+
+                    return (
+                      <li key={poCode} className="border-b border-slate-50 pb-0.5">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            aria-expanded={expanded}
+                            onClick={() => togglePoExpanded(poCode)}
+                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-1 py-1 text-left hover:bg-slate-50"
+                          >
+                            <span className="flex items-center gap-1.5 truncate font-medium text-slate-800">
+                              <span className="text-slate-400">
+                                {expanded ? "▼" : "▶"}
+                              </span>
+                              ПО {poCode}
+                            </span>
+                            <span className="flex-shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-slate-600">
+                              {count}
+                            </span>
+                          </button>
+                        </div>
+                        {expanded && (
+                          <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-slate-200 pl-2">
+                            {count === 0 ? (
+                              <li className="py-1 text-[11px] italic text-slate-500">
+                                Протоколы за выбранный год отсутствуют.
+                              </li>
+                            ) : (
+                              sorted.map((protocol) => {
+                                const dateLabel = protocol.meetingDate
+                                  ? new Date(
+                                      protocol.meetingDate
+                                    ).toLocaleDateString("ru-RU")
+                                  : "—";
+                                const active =
+                                  editingProtocolId === protocol.id;
+                                return (
+                                  <li key={protocol.id}>
+                                    <div className="group flex items-stretch gap-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          loadProtocolIntoForm(protocol)
+                                        }
+                                        className={`min-w-0 flex-1 rounded px-1.5 py-1 text-left transition ${
+                                          active
+                                            ? "bg-slate-900 text-white"
+                                            : "hover:bg-slate-100"
+                                        }`}
+                                      >
+                                        <span className="block truncate">
+                                          {dateLabel}
+                                          {protocol.number
+                                            ? ` · № ${protocol.number}`
+                                            : ""}
+                                        </span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        title="Удалить"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          deleteProtocol(protocol.id);
+                                        }}
+                                        className={`rounded px-1 text-[10px] font-medium opacity-0 transition group-hover:opacity-100 ${
+                                          active
+                                            ? "text-red-200 hover:text-white"
+                                            : "text-red-600 hover:bg-red-50"
+                                        }`}
+                                      >
+                                        ×
+                                      </button>
+                                    </div>
+                                  </li>
+                                );
+                              })
+                            )}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  })}
+                  </ul>
+                </div>
+              </div>
+            )}
           </div>
+
+          {yearModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+              <div
+                className="max-h-[90vh] w-full max-w-md overflow-hidden rounded-xl border bg-white shadow-xl"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="year-modal-title"
+              >
+                <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+                  <h2
+                    id="year-modal-title"
+                    className="text-sm font-semibold text-slate-900"
+                  >
+                    Выбор года
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setYearModalOpen(false)}
+                    className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                  >
+                    Закрыть
+                  </button>
+                </div>
+                <div className="max-h-[calc(90vh-52px)] overflow-auto p-4">
+                  <p className="mb-3 text-xs text-slate-600">
+                    После выбора года слева отобразятся номера ПО; раскройте ПО,
+                    чтобы увидеть протоколы с датой и номером.
+                  </p>
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    {availableYears.map((y) => (
+                      <button
+                        key={y}
+                        type="button"
+                        onClick={() => {
+                          setTreeYear(y);
+                          setExpandedPoCodes(new Set());
+                          setPoListFilter("");
+                          setYearModalOpen(false);
+                        }}
+                        className={`rounded-lg border py-2 text-sm font-semibold tabular-nums ${
+                          treeYear === y
+                            ? "border-slate-900 bg-slate-900 text-white"
+                            : "border-slate-200 hover:bg-slate-50"
+                        }`}
+                      >
+                        {y}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </aside>
 
         <section className="xl:col-span-2">
