@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  buildDecisionText,
+  buildEssenceText,
+  generateProtocolDraft,
+} from "@/lib/generateProtocolDraft";
+import { exportProtocolToDocx } from "@/lib/exportProtocolDocx";
 
 type Question = {
   id: number;
@@ -25,7 +31,19 @@ type FormData = {
   chairperson: string;
   secretary: string;
   invited: string;
+  invitedGuests: InvitedGuest[];
 };
+
+type InvitedGuest = {
+  id: number;
+  fullName: string;
+  role: string;
+};
+
+const invitedRoleOptions = [
+  "Секретарь Местного отделения Партии «ЕДИНАЯ РОССИЯ» муниципального образования Новоизмайловское",
+  "Председатель Местной контрольной комиссии Местного отделения Партии «ЕДИНАЯ РОССИЯ» муниципального образования Новоизмайловское",
+];
 
 type SavedAgendaItem = {
   id: string;
@@ -55,6 +73,93 @@ type SavedProtocol = {
   agendaItems: SavedAgendaItem[];
 };
 
+function toNonNegativeInt(value: string): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return 0;
+  }
+  return Math.floor(n);
+}
+
+function syncVotesWithPresent(question: Question, membersPresent: string): Question {
+  const present = toNonNegativeInt(membersPresent);
+  const against = toNonNegativeInt(question.votesAgainst);
+  const abstained = toNonNegativeInt(question.abstained);
+  const votesFor = Math.max(present - against - abstained, 0);
+
+  return {
+    ...question,
+    votesFor: String(votesFor),
+    votesAgainst: String(against),
+    abstained: String(abstained),
+  };
+}
+
+function parseInvitedGuestsFromBody(body: string): InvitedGuest[] {
+  const startMarker = "На собрание приглашены и присутствуют:";
+  const endMarker = "ПРЕДСЕДАТЕЛЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН:";
+  const start = body.indexOf(startMarker);
+  const end = body.indexOf(endMarker);
+
+  if (start === -1 || end === -1 || end <= start) {
+    return [emptyInvitedGuest()];
+  }
+
+  const rawBlock = body
+    .slice(start + startMarker.length, end)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const parsed = rawBlock
+    .map((line) => line.replace(/^\d+\.\s*/, "").replace(/\.$/, "").trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(",").map((part) => part.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        return {
+          id: Date.now() + Math.floor(Math.random() * 100000),
+          fullName: parts[0],
+          role: parts.slice(1).join(", "),
+        };
+      }
+      return {
+        id: Date.now() + Math.floor(Math.random() * 100000),
+        fullName: parts[0] || "",
+        role: "",
+      };
+    });
+
+  return parsed.length > 0 ? parsed : [emptyInvitedGuest()];
+}
+
+function parseField(body: string, regex: RegExp): string {
+  const match = body.match(regex);
+  return match?.[1]?.trim() ?? "";
+}
+
+function parseTemplateDataFromBody(body: string) {
+  return {
+    membersOnRegister: parseField(
+      body,
+      /На учете в первичном отделении Партии состоит\s+(.+?)\s+членов Партии\./i
+    ),
+    membersPresent: parseField(
+      body,
+      /На собрании присутствуют\s+(.+?)\s+членов Партии\./i
+    ),
+    chairperson: parseField(
+      body,
+      /ПРЕДСЕДАТЕЛЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН:\s*(.+?)\./i
+    ),
+    secretary: parseField(
+      body,
+      /СЕКРЕТАРЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН:\s*(.+?)\./i
+    ),
+    invitedGuests: parseInvitedGuestsFromBody(body),
+  };
+}
+
 const emptyQuestion = (): Question => ({
   id: Date.now(),
   title: "",
@@ -68,11 +173,18 @@ const emptyQuestion = (): Question => ({
   votesEditedManually: false,
 });
 
+const emptyInvitedGuest = (): InvitedGuest => ({
+  id: Date.now(),
+  fullName: "",
+  role: "",
+});
+
 export default function POPage() {
   const [showForm, setShowForm] = useState(false);
   const [showDraftModal, setShowDraftModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [savedProtocols, setSavedProtocols] = useState<SavedProtocol[]>([]);
   const [isLoadingProtocols, setIsLoadingProtocols] = useState(false);
@@ -93,6 +205,7 @@ export default function POPage() {
     chairperson: "",
     secretary: "",
     invited: "",
+    invitedGuests: [emptyInvitedGuest()],
   });
 
   const [questions, setQuestions] = useState<Question[]>([emptyQuestion()]);
@@ -128,6 +241,7 @@ export default function POPage() {
       chairperson: "",
       secretary: "",
       invited: "",
+      invitedGuests: [emptyInvitedGuest()],
     });
     setQuestions([emptyQuestion()]);
     setEditingProtocolId(null);
@@ -135,6 +249,8 @@ export default function POPage() {
   };
 
   const loadProtocolIntoForm = (protocol: SavedProtocol) => {
+    const templateData = parseTemplateDataFromBody(protocol.body || "");
+
     setFormData({
       poNumber: protocol.organ?.code || "",
       meetingDate: protocol.meetingDate
@@ -142,11 +258,16 @@ export default function POPage() {
         : "",
       meetingPlace: protocol.place || "",
       protocolNumber: protocol.number || "",
-      membersOnRegister: "",
-      membersPresent: "",
-      chairperson: "",
-      secretary: "",
-      invited: "",
+      membersOnRegister: templateData.membersOnRegister,
+      membersPresent: templateData.membersPresent,
+      chairperson: templateData.chairperson,
+      secretary: templateData.secretary,
+      invited: templateData.invitedGuests
+        .map((guest) =>
+          [guest.fullName, guest.role].filter(Boolean).join(", ")
+        )
+        .join("\n"),
+      invitedGuests: templateData.invitedGuests,
     });
 
     setQuestions(
@@ -202,7 +323,10 @@ export default function POPage() {
     }
   };
 
-  const updateFormData = (field: keyof FormData, value: string) => {
+  const updateFormData = (
+    field: Exclude<keyof FormData, "invitedGuests">,
+    value: string
+  ) => {
     setFormData((prev) => ({
       ...prev,
       [field]: value,
@@ -210,18 +334,38 @@ export default function POPage() {
 
     if (field === "membersPresent") {
       setQuestions((prev) =>
-        prev.map((question) =>
-          question.votesEditedManually
-            ? question
-            : {
-                ...question,
-                votesFor: value,
-                votesAgainst: "0",
-                abstained: "0",
-              }
-        )
+        prev.map((question) => syncVotesWithPresent(question, value))
       );
     }
+  };
+
+  const addInvitedGuest = () => {
+    setFormData((prev) => ({
+      ...prev,
+      invitedGuests: [...prev.invitedGuests, emptyInvitedGuest()],
+    }));
+  };
+
+  const removeInvitedGuest = (id: number) => {
+    setFormData((prev) => {
+      return {
+        ...prev,
+        invitedGuests: prev.invitedGuests.filter((guest) => guest.id !== id),
+      };
+    });
+  };
+
+  const updateInvitedGuest = (
+    id: number,
+    field: "fullName" | "role",
+    value: string
+  ) => {
+    setFormData((prev) => ({
+      ...prev,
+      invitedGuests: prev.invitedGuests.map((guest) =>
+        guest.id === id ? { ...guest, [field]: value } : guest
+      ),
+    }));
   };
 
   const addQuestion = () => {
@@ -261,41 +405,17 @@ export default function POPage() {
     setQuestions((prev) =>
       prev.map((question) =>
         question.id === id
-          ? {
-              ...question,
-              [field]: value,
-              votesEditedManually: true,
-            }
+          ? syncVotesWithPresent(
+              {
+                ...question,
+                [field]: value,
+                votesEditedManually: true,
+              },
+              formData.membersPresent
+            )
           : question
       )
     );
-  };
-
-  const buildEssenceText = (question: Question) => {
-    const speakerText = question.speaker
-      ? `Информацию ${question.speaker}`
-      : "Информацию по вопросу";
-
-    const titleText = question.title ? ` по вопросу «${question.title}»` : "";
-    const notesText = question.notes ? ` ${question.notes.trim()}` : "";
-
-    return `${speakerText}${titleText}.${notesText}`.trim();
-  };
-
-  const buildDecisionText = (question: Question) => {
-    const titleText = question.title || "рассматриваемому вопросу";
-
-    const noteSentence = question.notes
-      ? `2. ${question.notes.trim().charAt(0).toUpperCase()}${question.notes
-          .trim()
-          .slice(1)}.`
-      : `2. Организовать дальнейшую работу по вопросу «${titleText}» в установленном порядке.`;
-
-    return [
-      `1. Информацию по вопросу «${titleText}» принять к сведению.`,
-      noteSentence,
-      `3. Контроль за исполнением настоящего решения возложить на Секретаря ПО.`,
-    ].join("\n");
   };
 
   const generateEssence = (question: Question) => {
@@ -329,50 +449,44 @@ export default function POPage() {
     );
   };
 
-  const protocolDraft = `
-ПРОТОКОЛ № ${formData.protocolNumber || "___"}
-общего собрания ПО ${formData.poNumber || "___"}
+  const normalizedInvitedText = useMemo(() => {
+    const lines = formData.invitedGuests
+      .map((guest) => ({
+        fullName: guest.fullName.trim(),
+        role: guest.role.trim(),
+      }))
+      .filter((guest) => guest.fullName || guest.role)
+      .map((guest) => {
+        if (guest.fullName && guest.role) {
+          return `${guest.fullName}, ${guest.role}`;
+        }
+        return guest.fullName || guest.role;
+      });
 
-Дата проведения: ${formData.meetingDate || "___"}
-Место проведения: ${formData.meetingPlace || "___"}
+    return lines.join("\n");
+  }, [formData.invitedGuests]);
 
-Число членов Партии на учёте: ${formData.membersOnRegister || "___"}
-Число присутствующих: ${formData.membersPresent || "___"}
+  const formDataForDocument = useMemo(
+    () => ({
+      ...formData,
+      invited: normalizedInvitedText || formData.invited,
+    }),
+    [formData, normalizedInvitedText]
+  );
 
-Председатель собрания: ${formData.chairperson || "___"}
-Секретарь собрания: ${formData.secretary || "___"}
+  const protocolDraft = useMemo(
+    () => generateProtocolDraft(formDataForDocument, questions),
+    [formDataForDocument, questions]
+  );
 
-Приглашённые:
-${formData.invited || "___"}
-
-ПОВЕСТКА ДНЯ:
-${questions
-  .map(
-    (question, index) =>
-      `${index + 1}. ${question.title || "Формулировка вопроса не указана"}`
-  )
-  .join("\n")}
-
-${questions
-  .map(
-    (question, index) => `
-ВОПРОС ${index + 1}
-${question.title || "Формулировка вопроса не указана"}
-
-СЛУШАЛИ:
-${question.essence || "Текст пока не сформирован."}
-
-РЕШИЛИ:
-${question.decision || "Проект решения пока не сформирован."}
-
-ГОЛОСОВАЛИ:
-за — ${question.votesFor || "___"}
-против — ${question.votesAgainst || "___"}
-воздержались — ${question.abstained || "___"}
-`
-  )
-  .join("\n")}
-  `.trim();
+  const membersOnRegisterValue = toNonNegativeInt(formData.membersOnRegister);
+  const membersPresentValue = toNonNegativeInt(formData.membersPresent);
+  const hasMembersValidationInput =
+    formData.membersOnRegister.trim() !== "" && formData.membersPresent.trim() !== "";
+  const membersPresentIsNotMoreThanHalf =
+    hasMembersValidationInput &&
+    membersOnRegisterValue > 0 &&
+    membersPresentValue <= membersOnRegisterValue / 2;
 
   const copyDraft = async () => {
     await navigator.clipboard.writeText(protocolDraft);
@@ -381,6 +495,18 @@ ${question.decision || "Проект решения пока не сформир
     setTimeout(() => {
       setCopied(false);
     }, 2000);
+  };
+
+  const exportWord = async () => {
+    try {
+      setIsExporting(true);
+      await exportProtocolToDocx(formDataForDocument, questions);
+    } catch (error) {
+      console.error(error);
+      setSaveMessage("Ошибка экспорта в Word");
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const saveProtocol = async () => {
@@ -395,7 +521,7 @@ ${question.decision || "Проект решения пока не сформир
         },
         body: JSON.stringify({
           id: editingProtocolId,
-          ...formData,
+          ...formDataForDocument,
           protocolDraft,
           questions,
         }),
@@ -536,6 +662,15 @@ ${question.decision || "Проект решения пока не сформир
 
                     <button
                       type="button"
+                      onClick={exportWord}
+                      disabled={isExporting}
+                      className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium disabled:opacity-60"
+                    >
+                      {isExporting ? "Экспорт..." : "Экспорт в Word"}
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={saveProtocol}
                       disabled={isSaving}
                       className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
@@ -638,7 +773,11 @@ ${question.decision || "Проект решения пока не сформир
                       onChange={(e) =>
                         updateFormData("membersOnRegister", e.target.value)
                       }
-                      className="w-full rounded-xl border px-4 py-3"
+                      className={`w-full rounded-xl border px-4 py-3 ${
+                        membersPresentIsNotMoreThanHalf
+                          ? "border-red-500 bg-red-50"
+                          : ""
+                      }`}
                       placeholder="Например: 18"
                     />
                   </div>
@@ -653,9 +792,18 @@ ${question.decision || "Проект решения пока не сформир
                       onChange={(e) =>
                         updateFormData("membersPresent", e.target.value)
                       }
-                      className="w-full rounded-xl border px-4 py-3"
+                      className={`w-full rounded-xl border px-4 py-3 ${
+                        membersPresentIsNotMoreThanHalf
+                          ? "border-red-500 bg-red-50"
+                          : ""
+                      }`}
                       placeholder="Например: 12"
                     />
+                    {membersPresentIsNotMoreThanHalf && (
+                      <p className="mt-2 text-sm text-red-600">
+                        Для кворума присутствующих должно быть больше половины от числа членов на учёте.
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -689,18 +837,88 @@ ${question.decision || "Проект решения пока не сформир
                   </div>
 
                   <div>
-                    <label className="mb-2 block text-sm font-medium">
-                      Приглашённые
-                    </label>
-                    <textarea
-                      value={formData.invited}
-                      onChange={(e) =>
-                        updateFormData("invited", e.target.value)
-                      }
-                      className="w-full rounded-xl border px-4 py-3"
-                      rows={6}
-                      placeholder="Укажи приглашённых лиц, если они есть"
-                    />
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label className="block text-sm font-medium">
+                        Приглашённые
+                      </label>
+                      <button
+                        type="button"
+                        onClick={addInvitedGuest}
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium"
+                      >
+                        Добавить приглашённого
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      {formData.invitedGuests.map((guest) => (
+                        <div
+                          key={guest.id}
+                          className="rounded-xl border border-slate-200 bg-white p-3"
+                        >
+                          <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                            <input
+                              type="text"
+                              value={guest.fullName}
+                              onChange={(e) =>
+                                updateInvitedGuest(
+                                  guest.id,
+                                  "fullName",
+                                  e.target.value
+                                )
+                              }
+                              className="w-full rounded-xl border px-3 py-2"
+                              placeholder="ФИО"
+                            />
+                            <div className="grid gap-2">
+                              <select
+                                value={
+                                  invitedRoleOptions.includes(guest.role)
+                                    ? guest.role
+                                    : ""
+                                }
+                                onChange={(e) =>
+                                  updateInvitedGuest(
+                                    guest.id,
+                                    "role",
+                                    e.target.value
+                                  )
+                                }
+                                disabled={!guest.fullName.trim()}
+                                className="w-full rounded-xl border px-3 py-2 disabled:cursor-not-allowed disabled:bg-slate-100"
+                              >
+                                <option value="">Выберите должность</option>
+                                {invitedRoleOptions.map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="text"
+                                value={guest.role}
+                                onChange={(e) =>
+                                  updateInvitedGuest(
+                                    guest.id,
+                                    "role",
+                                    e.target.value
+                                  )
+                                }
+                                disabled={!guest.fullName.trim()}
+                                className="w-full rounded-xl border px-3 py-2 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                placeholder="Или введите должность вручную"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeInvitedGuest(guest.id)}
+                              className="rounded-xl border border-red-300 px-3 py-2 text-xs font-medium text-red-600"
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
