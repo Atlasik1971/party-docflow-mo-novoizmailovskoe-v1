@@ -100,8 +100,8 @@ function buildProtocolsByYearAndPo(
 ): Map<number, Map<string, SavedProtocol[]>> {
   const outer = new Map<number, Map<string, SavedProtocol[]>>();
   for (const doc of protocols) {
-    const y = yearFromMeetingDate(doc.meetingDate);
-    if (y === null) continue;
+    // Протоколы без даты относим к текущему году, чтобы они не терялись
+    const y = yearFromMeetingDate(doc.meetingDate) ?? new Date().getFullYear();
     const po = normalizePoCode(doc.organ?.code);
     if (!po) continue;
     if (!outer.has(y)) outer.set(y, new Map());
@@ -242,6 +242,7 @@ export default function POPage() {
   );
   const [poListFilter, setPoListFilter] = useState("");
   const [protocolSortNewestFirst, setProtocolSortNewestFirst] = useState(true);
+  const [selectedPoCode, setSelectedPoCode] = useState("");
 
   const [formData, setFormData] = useState<FormData>({
     poNumber: "",
@@ -323,9 +324,9 @@ export default function POPage() {
     return n;
   }, [treeYear, protocolsByYearAndPo]);
 
-  const resetForm = () => {
+  const resetForm = (poNumber = "") => {
     setFormData({
-      poNumber: "",
+      poNumber,
       meetingDate: "",
       meetingPlace: "",
       protocolNumber: "",
@@ -343,9 +344,10 @@ export default function POPage() {
 
   const loadProtocolIntoForm = (protocol: SavedProtocol) => {
     const templateData = parseTemplateDataFromBody(protocol.body || "");
+    const protocolPoCode = protocol.organ?.code || "";
 
     setFormData({
-      poNumber: protocol.organ?.code || "",
+      poNumber: protocolPoCode,
       meetingDate: protocol.meetingDate
         ? String(protocol.meetingDate).slice(0, 10)
         : "",
@@ -380,6 +382,7 @@ export default function POPage() {
         : [emptyQuestion()]
     );
 
+    setSelectedPoCode(protocolPoCode);
     setEditingProtocolId(protocol.id);
     setSelectedProtocol(null);
     setShowForm(true);
@@ -669,7 +672,7 @@ export default function POPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    resetForm();
+                    resetForm(selectedPoCode);
                     setSelectedProtocol(null);
                     setShowForm(true);
                   }}
@@ -748,16 +751,25 @@ export default function POPage() {
                   </button>
                 </div>
                 <div className="mt-1 flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-slate-100 bg-slate-50/80">
-                  <div className="flex-shrink-0 border-b border-slate-100 px-2 py-1.5 text-[11px] font-semibold text-slate-700">
-                    <span className="text-slate-400">▼</span>{" "}
-                    <span className="tabular-nums">{treeYear}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // «Свернуть» дерево: убираем выбранный год и очищаем состояние
+                      setTreeYear(null);
+                      setExpandedPoCodes(new Set());
+                      setPoListFilter("");
+                    }}
+                    className="flex w-full items-center border-b border-slate-100 px-2 py-1.5 text-left text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    <span className="text-slate-400">▼</span>
+                    <span className="ml-1 tabular-nums">{treeYear}</span>
                     <span className="ml-1 font-normal text-slate-500">
                       · номеров в списке: {filteredPoNumbers.length}
                       {poListFilter.trim() !== "" &&
                         filteredPoNumbers.length !== PO_NUMBERS.length &&
                         ` из ${PO_NUMBERS.length}`}
                     </span>
-                  </div>
+                  </button>
                   <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-1 py-1 text-xs">
                   {filteredPoNumbers.map((poCode) => {
                     const list = protocolsForPoInTreeYear(poCode);
@@ -779,8 +791,13 @@ export default function POPage() {
                           <button
                             type="button"
                             aria-expanded={expanded}
-                            onClick={() => togglePoExpanded(poCode)}
-                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-1 py-1 text-left hover:bg-slate-50"
+                            onClick={() => {
+                              setSelectedPoCode(poCode);
+                              togglePoExpanded(poCode);
+                            }}
+                            className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-1 py-1 text-left hover:bg-slate-50 ${
+                              selectedPoCode === poCode ? "bg-slate-100" : ""
+                            }`}
                           >
                             <span className="flex items-center gap-1.5 truncate font-medium text-slate-800">
                               <span className="text-slate-400">
@@ -1144,7 +1161,7 @@ export default function POPage() {
                               className="w-full rounded-xl border px-3 py-2"
                               placeholder="ФИО"
                             />
-                            <div className="grid gap-2">
+                            <div>
                               <select
                                 value={
                                   invitedRoleOptions.includes(guest.role)
@@ -1168,20 +1185,6 @@ export default function POPage() {
                                   </option>
                                 ))}
                               </select>
-                              <input
-                                type="text"
-                                value={guest.role}
-                                onChange={(e) =>
-                                  updateInvitedGuest(
-                                    guest.id,
-                                    "role",
-                                    e.target.value
-                                  )
-                                }
-                                disabled={!guest.fullName.trim()}
-                                className="w-full rounded-xl border px-3 py-2 disabled:cursor-not-allowed disabled:bg-slate-100"
-                                placeholder="Или введите должность вручную"
-                              />
                             </div>
                             <button
                               type="button"
@@ -1253,7 +1256,7 @@ export default function POPage() {
 
                         <div>
                           <label className="mb-2 block text-sm font-medium">
-                            Тезисы / комментарий пользователя
+                            Выступили
                           </label>
                           <textarea
                             value={question.notes}
@@ -1266,182 +1269,8 @@ export default function POPage() {
                             }
                             className="w-full rounded-xl border px-4 py-3"
                             rows={3}
-                            placeholder="Коротко опиши суть вопроса"
+                            placeholder="Кратко зафиксируй основные выступления по вопросу"
                           />
-                        </div>
-
-                        <div>
-                          <label className="mb-2 block text-sm font-medium">
-                            Докладчик
-                          </label>
-                          <input
-                            type="text"
-                            value={question.speaker}
-                            onChange={(e) =>
-                              updateQuestion(
-                                question.id,
-                                "speaker",
-                                e.target.value
-                              )
-                            }
-                            className="w-full rounded-xl border px-4 py-3"
-                            placeholder="Например: Секретарь ПО"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="mb-2 block text-sm font-medium">
-                            Суть вопроса
-                          </label>
-                          <textarea
-                            value={question.essence}
-                            onChange={(e) =>
-                              updateQuestion(
-                                question.id,
-                                "essence",
-                                e.target.value
-                              )
-                            }
-                            className="w-full rounded-xl border px-4 py-3"
-                            rows={3}
-                            placeholder="Здесь позже ИИ будет предлагать текст для блока СЛУШАЛИ"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="mb-2 block text-sm font-medium">
-                            Проект решения
-                          </label>
-                          <textarea
-                            value={question.decision}
-                            onChange={(e) =>
-                              updateQuestion(
-                                question.id,
-                                "decision",
-                                e.target.value
-                              )
-                            }
-                            className="w-full rounded-xl border px-4 py-3"
-                            rows={4}
-                            placeholder="Здесь позже ИИ будет предлагать текст для блока РЕШИЛИ"
-                          />
-                        </div>
-
-                        <div className="grid gap-4 md:grid-cols-3">
-                          <div>
-                            <label className="mb-2 block text-sm font-medium">
-                              За
-                            </label>
-                            <input
-                              type="number"
-                              value={question.votesFor}
-                              onChange={(e) =>
-                                updateVotes(
-                                  question.id,
-                                  "votesFor",
-                                  e.target.value
-                                )
-                              }
-                              className="w-full rounded-xl border px-4 py-3"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-2 block text-sm font-medium">
-                              Против
-                            </label>
-                            <input
-                              type="number"
-                              value={question.votesAgainst}
-                              onChange={(e) =>
-                                updateVotes(
-                                  question.id,
-                                  "votesAgainst",
-                                  e.target.value
-                                )
-                              }
-                              className="w-full rounded-xl border px-4 py-3"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-2 block text-sm font-medium">
-                              Воздержались
-                            </label>
-                            <input
-                              type="number"
-                              value={question.abstained}
-                              onChange={(e) =>
-                                updateVotes(
-                                  question.id,
-                                  "abstained",
-                                  e.target.value
-                                )
-                              }
-                              className="w-full rounded-xl border px-4 py-3"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-3">
-                          <button
-                            type="button"
-                            onClick={() => generateEssence(question)}
-                            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-                          >
-                            Предложить суть вопроса
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => generateDecision(question)}
-                            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
-                          >
-                            Предложить решение
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => generateFullBlock(question)}
-                            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium"
-                          >
-                            Предложить полный блок
-                          </button>
-                        </div>
-
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                          <p className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-                            Черновик протокольного блока
-                          </p>
-
-                          <div className="mt-3 space-y-3 text-sm leading-6 text-slate-800">
-                            <div>
-                              <p className="font-semibold">СЛУШАЛИ:</p>
-                              <p className="mt-1 whitespace-pre-line">
-                                {question.essence ||
-                                  "Текст пока не сформирован."}
-                              </p>
-                            </div>
-
-                            <div>
-                              <p className="font-semibold">РЕШИЛИ:</p>
-                              <p className="mt-1 whitespace-pre-line">
-                                {question.decision ||
-                                  "Проект решения пока не сформирован."}
-                              </p>
-                            </div>
-
-                            <div>
-                              <p className="font-semibold">ГОЛОСОВАЛИ:</p>
-                              <p className="mt-1 whitespace-pre-line">
-                                {`за — ${question.votesFor || "___"}`}
-                                {"\n"}
-                                {`против — ${question.votesAgainst || "___"}`}
-                                {"\n"}
-                                {`воздержались — ${question.abstained || "___"}`}
-                              </p>
-                            </div>
-                          </div>
                         </div>
                       </div>
                     </div>
@@ -1460,7 +1289,7 @@ export default function POPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    resetForm();
+                    resetForm(selectedPoCode);
                     setSelectedProtocol(null);
                     setShowForm(true);
                   }}

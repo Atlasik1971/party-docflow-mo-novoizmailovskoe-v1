@@ -7,9 +7,6 @@ import {
   Packer,
   PageOrientation,
   Paragraph,
-  Tab,
-  TabStopPosition,
-  TabStopType,
   Table,
   TableCell,
   TableLayoutType,
@@ -48,6 +45,11 @@ type ProtocolDraftQuestion = {
 function text(value: string, fallback: string): string {
   const normalized = value.trim();
   return normalized || fallback;
+}
+
+function optionalText(value: string): string | null {
+  const normalized = value.trim();
+  return normalized || null;
 }
 
 function toDateLabel(value: string): string {
@@ -94,7 +96,8 @@ function invitedLines(formData: ProtocolDraftFormData): string[] {
     return fromText.map((line, index) => `${index + 1}. ${line}`);
   }
 
-  return ["Сведения о приглашённых лицах вносятся при оформлении протокола."];
+  // Если приглашённых нет, просто оставляем пустой блок без заглушек
+  return [];
 }
 
 function ensureSentence(value: string): string {
@@ -103,6 +106,45 @@ function ensureSentence(value: string): string {
     return "";
   }
   return /[.!?…]$/.test(normalized) ? normalized : `${normalized}.`;
+}
+
+function toAboutQuestionPhrase(title: string): string {
+  const normalized = title.trim().replace(/[.?!]+$/, "");
+  if (!normalized) {
+    return "рассматриваемом вопросе";
+  }
+
+  const lowerCased =
+    normalized.charAt(0).toLowerCase() + normalized.slice(1);
+
+  if (/^(о|об|обо)\s/i.test(lowerCased)) {
+    return lowerCased;
+  }
+
+  const [firstWord, ...restWords] = lowerCased.split(/\s+/);
+  let transformedFirstWord = firstWord;
+
+  if (firstWord.endsWith("ие")) {
+    transformedFirstWord = `${firstWord.slice(0, -2)}ии`;
+  } else if (firstWord.endsWith("ка")) {
+    transformedFirstWord = `${firstWord.slice(0, -2)}ке`;
+  } else if (firstWord.endsWith("га")) {
+    transformedFirstWord = `${firstWord.slice(0, -2)}ге`;
+  } else if (firstWord.endsWith("ха")) {
+    transformedFirstWord = `${firstWord.slice(0, -2)}хе`;
+  } else if (firstWord.endsWith("а")) {
+    transformedFirstWord = `${firstWord.slice(0, -1)}е`;
+  } else if (firstWord.endsWith("я")) {
+    transformedFirstWord = `${firstWord.slice(0, -1)}и`;
+  } else if (firstWord.endsWith("ы")) {
+    transformedFirstWord = `${firstWord.slice(0, -1)}ах`;
+  } else if (firstWord.endsWith("ь")) {
+    transformedFirstWord = `${firstWord.slice(0, -1)}и`;
+  } else if (/[бвгджзйклмнпрстфхцчшщ]$/i.test(firstWord)) {
+    transformedFirstWord = `${firstWord}е`;
+  }
+
+  return [transformedFirstWord, ...restWords].join(" ");
 }
 
 function parseDecisionItems(question: ProtocolDraftQuestion): string[] {
@@ -200,6 +242,36 @@ function makeSignatureTable(formData: ProtocolDraftFormData): Table {
   });
 }
 
+function formatRuFullDate(value: string): string | null {
+  if (!value.trim()) return null;
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const day = date.getDate().toString().padStart(2, "0");
+  const month = date.getMonth(); // 0-11
+  const year = date.getFullYear();
+
+  const monthNames = [
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+  ];
+
+  const monthName = monthNames[month] ?? "";
+  if (!monthName) return null;
+
+  return `«${day}» ${monthName} ${year} г.`;
+}
+
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -230,8 +302,18 @@ export async function exportProtocolToDocx(
             abstained: "",
           },
         ];
-  const protocolNumber = text(formData.protocolNumber, "б/н");
-  const poName = text(formData.poNumber, "номер уточняется");
+  const protocolNumber = formData.protocolNumber.trim() || "б/н";
+  const poName = formData.poNumber.trim();
+
+  const membersOnRegister = formData.membersOnRegister.trim();
+  const membersPresent = formData.membersPresent.trim();
+  const chairperson = formData.chairperson.trim();
+  const secretary = formData.secretary.trim();
+
+  const address =
+    optionalText(formData.meetingPlace) ??
+    "г. Санкт-Петербург, Новоизмайловский пр., д.85";
+  const formattedDate = formatRuFullDate(formData.meetingDate) ?? "";
 
   const doc = new Document({
     styles: {
@@ -312,6 +394,7 @@ export async function exportProtocolToDocx(
           }),
         },
         children: [
+          // Заголовок
           new Paragraph({
             text: `ПРОТОКОЛ № ${protocolNumber}`,
             style: "centerBold",
@@ -321,36 +404,71 @@ export async function exportProtocolToDocx(
             style: "centerBold",
           }),
           new Paragraph({
-            text: "Местное отделение Партии «ЕДИНАЯ РОССИЯ» района Новоизмайловское",
+            text: "местного отделения муниципального образования Новоизмайловское",
             style: "centerBold",
           }),
           new Paragraph(""),
-          new Paragraph({
-            children: [
-              new TextRun(text(formData.meetingPlace, "Место проведения: уточняется")),
-              new Tab(),
-              new TextRun(`Дата: ${toDateLabel(formData.meetingDate)}`),
-            ],
-            tabStops: [
-              {
-                type: TabStopType.RIGHT,
-                position: TabStopPosition.MAX,
-              },
+          // Строка место / дата через таблицу
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            layout: TableLayoutType.FIXED,
+            borders: {
+              top: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+              bottom: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+              left: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+              right: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+              insideHorizontal: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+              insideVertical: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    width: { size: 50, type: WidthType.PERCENTAGE },
+                    borders: {
+                      top: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                      bottom: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                      left: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                      right: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                    },
+                    children: [new Paragraph({ text: address })],
+                  }),
+                  new TableCell({
+                    width: { size: 50, type: WidthType.PERCENTAGE },
+                    borders: {
+                      top: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                      bottom: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                      left: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                      right: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+                    },
+                    children: [
+                      new Paragraph({
+                        children: [new TextRun({ text: formattedDate })],
+                        alignment: AlignmentType.RIGHT,
+                      }),
+                    ],
+                  }),
+                ],
+              }),
             ],
           }),
           new Paragraph(""),
-          new Paragraph({
-            text: `На учете в первичном отделении Партии состоит ${text(
-              formData.membersOnRegister,
-              "сведения уточняются"
-            )} членов Партии.`,
-          }),
-          new Paragraph({
-            text: `На собрании присутствуют ${text(
-              formData.membersPresent,
-              "сведения уточняются"
-            )} членов Партии.`,
-          }),
+          // Учёт и присутствие
+          ...(membersOnRegister
+            ? [
+                new Paragraph({
+                  text: `На учете в первичном отделении Партии состоит ${membersOnRegister} членов Партии.`,
+                }),
+              ]
+            : []),
+          ...(membersPresent
+            ? [
+                new Paragraph({
+                  text: `На собрании присутствуют ${membersPresent} членов Партии.`,
+                }),
+              ]
+            : []),
+          new Paragraph(""),
           new Paragraph({
             text: "Кворум имеется. Лист регистрации прилагается.",
           }),
@@ -358,54 +476,51 @@ export async function exportProtocolToDocx(
             text: "На собрание приглашены и присутствуют:",
           }),
           ...invitedLines(formData).map((line) => new Paragraph({ text: line })),
+          new Paragraph(""),
+          // Председатель
           new Paragraph({
             children: [
               new TextRun({
-                text: "ПРЕДСЕДАТЕЛЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН: ",
+                text: "ПРЕДСЕДАТЕЛЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН:",
                 bold: true,
               }),
-              new TextRun(text(formData.chairperson, "определяется решением собрания")),
+              new TextRun({
+                text: chairperson ? ` ${chairperson}` : "",
+              }),
             ],
           }),
+          new Paragraph({
+            children: [new TextRun({ text: "ГОЛОСОВАЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: `«за» - ${membersPresent || "0"}, «против» - 0, «воздержались» - 0`,
+          }),
+          new Paragraph(""),
+          // Секретарь
           new Paragraph({
             children: [
               new TextRun({
-                text: "ГОЛОСОВАЛИ: ",
+                text: "СЕКРЕТАРЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН:",
                 bold: true,
               }),
-              new TextRun(
-                `за — ${text(
-                  formData.membersPresent,
-                  "сведения уточняются"
-                )}; против — 0; воздержались — 0.`
-              ),
-            ],
-          }),
-          new Paragraph({
-            children: [
               new TextRun({
-                text: "СЕКРЕТАРЕМ ОБЩЕГО СОБРАНИЯ ИЗБРАН: ",
-                bold: true,
+                text: secretary ? ` ${secretary}` : "",
               }),
-              new TextRun(text(formData.secretary, "определяется решением собрания")),
             ],
           }),
           new Paragraph({
-            children: [
-              new TextRun({
-                text: "ГОЛОСОВАЛИ: ",
-                bold: true,
-              }),
-              new TextRun(
-                `за — ${text(
-                  formData.membersPresent,
-                  "сведения уточняются"
-                )}; против — 0; воздержались — 0.`
-              ),
-            ],
+            children: [new TextRun({ text: "ГОЛОСОВАЛИ:", bold: true })],
           }),
           new Paragraph({
-            text: "СЛУШАЛИ: Информацию Председателя собрания об утверждении повестки Общего собрания.",
+            text: `«за» - ${membersPresent || "0"}, «против» - 0, «воздержались» - 0`,
+          }),
+          new Paragraph(""),
+          // Слушали / Повестка
+          new Paragraph({
+            children: [new TextRun({ text: "СЛУШАЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: "Информацию Председателя собрания об утверждении повестки Общего собрания.",
           }),
           new Paragraph(""),
           new Paragraph({
@@ -425,6 +540,41 @@ export async function exportProtocolToDocx(
               })
           ),
           new Paragraph(""),
+          // Стандартный блок: утверждение повестки
+          new Paragraph({
+            children: [new TextRun({ text: "РЕШИЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: "Утвердить предложенную повестку.",
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: "ГОЛОСОВАЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: `«за» - ${membersPresent || "0"}, «против» - 0, «воздержались» - 0`,
+          }),
+          new Paragraph(""),
+          // Стандартный блок: утверждение регламента
+          new Paragraph({
+            children: [new TextRun({ text: "СЛУШАЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: "Информацию Председателя собрания об утверждении регламента работы Общего собрания.",
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: "РЕШИЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: "Утвердить предложенный регламент работы: на выступления - по 5 минут.",
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: "ГОЛОСОВАЛИ:", bold: true })],
+          }),
+          new Paragraph({
+            text: `«за» - ${membersPresent || "0"}, «против» - 0, «воздержались» - 0`,
+          }),
+          new Paragraph(""),
+          // Блоки по каждому вопросу повестки
           ...listQuestions.flatMap((question, index) => {
             const headingWords = [
               "первому",
@@ -441,6 +591,24 @@ export async function exportProtocolToDocx(
             const nWord = headingWords[index] ?? `${index + 1}-му`;
             const decisionItems = parseDecisionItems(question);
 
+            const rawTitle = question.title.trim();
+            const rawEssence = question.essence.trim();
+            const rawSpeaker = question.speaker.trim();
+            const speakerObjectLabel =
+              rawSpeaker || (index === 0 ? "Секретаря ПО" : "Председателя собрания");
+            const speakerSubjectLabel =
+              rawSpeaker || (index === 0 ? "Секретарь ПО" : "Председатель собрания");
+            const aboutTitle = toAboutQuestionPhrase(rawTitle);
+
+            const neutralEssence =
+              "содержанию рассматриваемого вопроса, отраженному в материалах собрания.";
+
+            const slushaliLine =
+              rawEssence ||
+              (rawTitle
+                ? `Информацию ${speakerObjectLabel} о ${aboutTitle}. ${speakerSubjectLabel} проинформировал(а) о ${neutralEssence}`
+                : `Информацию ${speakerObjectLabel} по рассматриваемому вопросу. ${speakerSubjectLabel} проинформировал(а) о ${neutralEssence}`);
+
             return [
               new Paragraph({
                 text: `${index + 1}. По ${nWord} вопросу повестки:`,
@@ -450,25 +618,7 @@ export async function exportProtocolToDocx(
                 children: [new TextRun({ text: "СЛУШАЛИ:", bold: true })],
               }),
               new Paragraph({
-                text: text(
-                  question.essence,
-                  `Информацию по вопросу «${text(
-                    question.title,
-                    "повестки дня"
-                  )}» довел(а) ${text(
-                    question.speaker,
-                    "уполномоченный представитель первичного отделения"
-                  )}.`
-                ),
-              }),
-              new Paragraph({
-                children: [new TextRun({ text: "ВЫСТУПИЛ:", bold: true })],
-              }),
-              new Paragraph({
-                text: text(
-                  question.notes,
-                  "Выступления по вопросу внесены в рабочие материалы собрания."
-                ),
+                text: slushaliLine,
               }),
               new Paragraph({
                 children: [new TextRun({ text: "РЕШИЛИ:", bold: true })],
@@ -487,13 +637,7 @@ export async function exportProtocolToDocx(
                 children: [new TextRun({ text: "ГОЛОСОВАЛИ:", bold: true })],
               }),
               new Paragraph({
-                text: `ЗА — ${text(
-                  question.votesFor,
-                  "сведения уточняются"
-                )}; ПРОТИВ — ${text(
-                  question.votesAgainst,
-                  "сведения уточняются"
-                )}; ВОЗДЕРЖАЛИСЬ — ${text(question.abstained, "сведения уточняются")}.`,
+                text: `«за» - ${membersPresent || "0"}, «против» - 0, «воздержались» - 0`,
               }),
               new Paragraph(""),
             ];
